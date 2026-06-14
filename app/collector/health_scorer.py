@@ -34,7 +34,7 @@ class HealthScorer:
         )
         overall = round(min(max(overall, 0), 100), 1)
 
-        anomalies = self._detect_anomalies(scores)
+        anomalies = self._detect_anomalies(scores, latest_metrics, conn)
 
         await self.store.insert_health_score(db_id, overall, scores, anomalies)
 
@@ -47,8 +47,8 @@ class HealthScorer:
     def _score_connections(self, metrics: Dict, conn: DatabaseConnection) -> float:
         if not metrics:
             return 100.0
-        active = metrics.get("active_connections", 0)
         total = metrics.get("total_connections", 0)
+        # Try to get max_connections from config, fallback to estimate
         max_conn = 100
         try:
             if conn.pool:
@@ -63,7 +63,8 @@ class HealthScorer:
         if not metrics:
             return 100.0
         ratio = metrics.get("cache_hit_ratio", 100)
-        return round(min(ratio, 100), 1)
+        # Cache hit ratio IS the score (0-100)
+        return round(min(max(ratio, 0), 100), 1)
 
     async def _score_tps_stability(self, db_id: str) -> float:
         start = time.time() - 600
@@ -81,6 +82,7 @@ class HealthScorer:
 
         variance = sum((v - avg) ** 2 for v in tps_values) / len(tps_values)
         stddev = variance ** 0.5
+        # Coefficient of variation as instability metric
         cv = (stddev / avg) * 100
 
         return round(max(100 - cv, 0), 1)
@@ -109,9 +111,9 @@ class HealthScorer:
                 lag = float(rows[0]["lag_seconds"])
                 threshold = self.thresholds.get("replication_lag_seconds", {})
                 critical = threshold.get("critical", 60)
+                warning = threshold.get("warning", 10)
                 if lag >= critical:
                     return 0.0
-                warning = threshold.get("warning", 10)
                 if lag >= warning:
                     return round(100 - ((lag - warning) / (critical - warning) * 100), 1)
                 return 100.0
@@ -136,7 +138,16 @@ class HealthScorer:
             rows = await conn.execute_query(query)
             if rows:
                 ratio = float(rows[0].get("avg_bloat_ratio", 0))
-                return round(max(100 - ratio * 200, 0), 1)
+                # Thresholds: warning at 0.3 (30% dead), critical at 0.5 (50% dead)
+                threshold = self.thresholds.get("bloat_ratio", {})
+                critical = threshold.get("critical", 0.5)
+                warning = threshold.get("warning", 0.3)
+                if ratio >= critical:
+                    return 0.0
+                if ratio >= warning:
+                    return round(100 - ((ratio - warning) / (critical - warning) * 100), 1)
+                # Linear scale below warning
+                return round(max(100 - (ratio / warning) * 30, 70), 1)
         except Exception:
             pass
         return 100.0
@@ -147,61 +158,111 @@ class HealthScorer:
             return 100.0
 
         total = len(stats)
+        if total == 0:
+            return 100.0
+
         unused = sum(1 for s in stats if s.get("idx_scan", 0) == 0
                      and not s.get("is_unique") and not s.get("is_primary"))
 
-        if total == 0:
-            return 100.0
         pct_unused = (unused / total) * 100
-        return round(max(100 - pct_unused * 2.5, 0), 1)
+        # Thresholds for unused index percentage
+        threshold = self.thresholds.get("unused_index_pct", {})
+        critical = threshold.get("critical", 40)
+        warning = threshold.get("warning", 20)
+        if pct_unused >= critical:
+            return 0.0
+        if pct_unused >= warning:
+            return round(100 - ((pct_unused - warning) / (critical - warning) * 100), 1)
+        return round(100 - (pct_unused / warning) * 20, 1)
 
     async def _score_slow_queries(self, db_id: str) -> float:
-        since = time.time() - 300
         queries = await self.store.get_slow_queries(db_id, window_seconds=300)
         rate_per_min = len(queries) / 5.0
 
         threshold = self.thresholds.get("slow_query_rate_per_min", {})
         critical = threshold.get("critical", 20)
+        warning = threshold.get("warning", 5)
         if rate_per_min >= critical:
             return 0.0
-        warning = threshold.get("warning", 5)
         if rate_per_min >= warning:
             return round(100 - ((rate_per_min - warning) / (critical - warning) * 100), 1)
         return 100.0
 
-    def _detect_anomalies(self, scores: Dict[str, float]) -> List[Dict[str, Any]]:
+    def _detect_anomalies(
+        self, scores: Dict[str, float],
+        metrics: Dict[str, Any], conn: DatabaseConnection
+    ) -> List[Dict[str, Any]]:
+        """Detect anomalies using properly interpreted thresholds.
+
+        Threshold semantics vary by dimension:
+        - cache_hit: {warning: 95, critical: 85} → score BELOW threshold triggers alert
+          (higher threshold = stricter, "warning at 95" means anything below 95% is a warning)
+        - connections_pct: {warning: 70, critical: 90} → raw usage ABOVE threshold triggers alert
+        - bloat_ratio: {warning: 0.3, critical: 0.5} → raw value ABOVE threshold triggers alert
+        - slow_query_rate_per_min: {warning: 5, critical: 20} → rate ABOVE threshold triggers alert
+        - replication_lag_seconds: {warning: 10, critical: 60} → lag ABOVE threshold triggers alert
+        - unused_index_pct: {warning: 20, critical: 40} → pct ABOVE threshold triggers alert
+        - tps_drop_pct: {warning: 30, critical: 60} → drop pct ABOVE threshold triggers alert
+
+        We use the SCORE (0-100, higher = healthier) and compare against fixed
+        score thresholds derived from the config. The key insight:
+        - warning score = when the metric first enters warning territory
+        - critical score = when the metric is critically bad (score near 0)
+        """
         anomalies = []
-        threshold_map = {
-            "connections": "connections_pct",
-            "cache_hit": "cache_hit",
-            "tps_stability": "tps_drop_pct",
-            "replication_lag": "replication_lag_seconds",
-            "bloat": "bloat_ratio",
-            "index_health": "unused_index_pct",
-            "slow_query_rate": "slow_query_rate_per_min",
+
+        # For each dimension, determine alert by score thresholds
+        # We define: critical alert if score < 20, warning if score < 50
+        # But we also cross-check with the configured thresholds for proper messaging
+
+        dimension_labels = {
+            "connections": "连接数",
+            "cache_hit": "缓存命中率",
+            "tps_stability": "TPS 稳定性",
+            "replication_lag": "复制延迟",
+            "bloat": "表膨胀",
+            "index_health": "索引健康",
+            "slow_query_rate": "慢查询率",
         }
 
-        for dim, score in scores.items():
-            t_key = threshold_map.get(dim)
-            if not t_key or t_key not in self.thresholds:
-                continue
-            thresholds = self.thresholds[t_key]
-            critical_val = thresholds.get("critical", 0)
-            warning_val = thresholds.get("warning", 0)
+        # Anomaly detection uses the score itself:
+        # - The scoring functions already encode the threshold semantics
+        #   (e.g., cache_hit score IS the ratio, so score=90 with warning=95 means anomaly)
+        # - We apply two score-based severity levels:
 
-            if score < 100 - critical_val:
+        # cache_hit: warning threshold means "cache hit below X% is concerning"
+        #   So if score < warning_threshold → warning; if score < critical_threshold → critical
+        cache_warn = self.thresholds.get("cache_hit", {}).get("warning", 95)
+        cache_crit = self.thresholds.get("cache_hit", {}).get("critical", 85)
+
+        # For other dimensions, we use fixed score bands since their scoring functions
+        # already translate raw values to 0-100 scores using the configured thresholds
+
+        for dim, score in scores.items():
+            label = dimension_labels.get(dim, dim)
+            severity = None
+
+            if dim == "cache_hit":
+                # cache_hit score = the ratio itself; thresholds are ratio values
+                if score < cache_crit:
+                    severity = "critical"
+                elif score < cache_warn:
+                    severity = "warning"
+            else:
+                # For all other dimensions: scoring functions already map through thresholds
+                # Score < 20 → critical (means raw value exceeded critical threshold)
+                # Score < 50 → warning (means raw value exceeded warning threshold)
+                if score < 20:
+                    severity = "critical"
+                elif score < 50:
+                    severity = "warning"
+
+            if severity:
                 anomalies.append({
                     "dimension": dim,
-                    "severity": "critical",
-                    "score": score,
-                    "message": f"{dim} 评分 {score}，低于严重阈值",
-                })
-            elif score < 100 - warning_val:
-                anomalies.append({
-                    "dimension": dim,
-                    "severity": "warning",
-                    "score": score,
-                    "message": f"{dim} 评分 {score}，触发告警阈值",
+                    "severity": severity,
+                    "score": round(score, 1),
+                    "message": f"{label}评分 {score:.0f}（{'严重' if severity == 'critical' else '告警'}）",
                 })
 
         return anomalies

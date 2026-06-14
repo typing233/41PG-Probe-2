@@ -477,6 +477,27 @@ body {
 /* ==============================================
    Slow Query Trends
    ============================================== */
+.dim-selector {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+}
+.dim-btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid #2d3d50;
+    background: transparent;
+    color: #8899a6;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.dim-btn:hover { border-color: #4fc3f7; color: #e1e8ed; }
+.dim-btn.active { background: #1e3a4f; border-color: #4fc3f7; color: #4fc3f7; }
+
+.clickable-row { cursor: pointer; }
+.clickable-row:hover { background: #1e3a4f !important; }
+
 .compare-controls {
     display: flex;
     flex-wrap: wrap;

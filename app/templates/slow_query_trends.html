@@ -14,6 +14,16 @@
 </div>
 
 <div class="section">
+    <h3>总览趋势</h3>
+    <div class="chart-container">
+        <canvas id="chart-trend-count"></canvas>
+    </div>
+    <div class="chart-container">
+        <canvas id="chart-trend-duration"></canvas>
+    </div>
+</div>
+
+<div class="section">
     <h3>查询模式 Top N</h3>
     <div class="table-wrapper">
         <table class="data-table">
@@ -32,12 +42,19 @@
 </div>
 
 <div class="section">
-    <h3>趋势图</h3>
-    <div class="chart-container">
-        <canvas id="chart-trend-count"></canvas>
+    <h3>维度下钻</h3>
+    <div class="dim-selector">
+        <button class="dim-btn active" data-dim="fingerprint">按查询指纹</button>
+        <button class="dim-btn" data-dim="user">按用户</button>
+        <button class="dim-btn" data-dim="client">按客户端 IP</button>
     </div>
+    <div id="dimension-table" class="table-wrapper"></div>
+</div>
+
+<div class="section" id="drilldown-section" style="display:none">
+    <h3 id="drilldown-title">下钻详情</h3>
     <div class="chart-container">
-        <canvas id="chart-trend-duration"></canvas>
+        <canvas id="chart-drilldown"></canvas>
     </div>
 </div>
 

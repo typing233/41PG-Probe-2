@@ -503,6 +503,164 @@ class SQLiteStore:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def get_trends_by_user(
+        self, db_id: str, start_time: float, end_time: float, limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Aggregate trend data by user, extracted from top_users JSON."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, top_users, occurrence_count, total_duration
+            FROM slow_query_trends
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+        user_agg: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"total_occurrences": 0, "total_time": 0.0, "hours_active": 0}
+        )
+        for row in rows:
+            try:
+                users = json.loads(row["top_users"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for u in users:
+                name = u.get("user", "unknown")
+                count = u.get("count", 0)
+                # Proportion of this fingerprint's duration attributed to this user
+                total_occ = row["occurrence_count"] or 1
+                proportion = count / total_occ
+                user_agg[name]["total_occurrences"] += count
+                user_agg[name]["total_time"] += (row["total_duration"] or 0) * proportion
+                user_agg[name]["hours_active"] += 1
+
+        result = [
+            {"user": k, **v} for k, v in user_agg.items()
+        ]
+        result.sort(key=lambda x: x["total_time"], reverse=True)
+        return result[:limit]
+
+    async def get_trends_by_client(
+        self, db_id: str, start_time: float, end_time: float,
+        top_n: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Aggregate trend data by client IP, using top_clients JSON.
+        Groups low-frequency clients into 'others' to handle high cardinality."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, top_clients, occurrence_count, total_duration
+            FROM slow_query_trends
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+        client_agg: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"total_occurrences": 0, "total_time": 0.0, "hours_active": 0}
+        )
+        for row in rows:
+            try:
+                clients = json.loads(row["top_clients"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            total_occ = row["occurrence_count"] or 1
+            for c in clients:
+                addr = c.get("client", "unknown")
+                count = c.get("count", 0)
+                proportion = count / total_occ
+                client_agg[addr]["total_occurrences"] += count
+                client_agg[addr]["total_time"] += (row["total_duration"] or 0) * proportion
+                client_agg[addr]["hours_active"] += 1
+
+        result = sorted(
+            [{"client": k, **v} for k, v in client_agg.items()],
+            key=lambda x: x["total_time"], reverse=True,
+        )
+
+        # Collapse low-frequency clients into 'others' if exceeding top_n
+        if len(result) > top_n:
+            top_part = result[:top_n]
+            others = result[top_n:]
+            others_entry = {
+                "client": "others",
+                "total_occurrences": sum(o["total_occurrences"] for o in others),
+                "total_time": sum(o["total_time"] for o in others),
+                "hours_active": len(set().union(*(set() for _ in others))),  # approximate
+                "collapsed_count": len(others),
+            }
+            top_part.append(others_entry)
+            return top_part
+
+        return result
+
+    async def get_trend_timeseries_by_user(
+        self, db_id: str, start_time: float, end_time: float, username: str
+    ) -> List[Dict[str, Any]]:
+        """Get hourly time series for a specific user."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, top_users, occurrence_count, total_duration, avg_duration
+            FROM slow_query_trends
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+
+        hourly: Dict[float, Dict] = defaultdict(lambda: {"count": 0, "duration": 0.0})
+        for row in rows:
+            try:
+                users = json.loads(row["top_users"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for u in users:
+                if u.get("user") == username:
+                    total_occ = row["occurrence_count"] or 1
+                    proportion = u.get("count", 0) / total_occ
+                    hourly[row["hour_bucket"]]["count"] += u.get("count", 0)
+                    hourly[row["hour_bucket"]]["duration"] += (row["total_duration"] or 0) * proportion
+
+        return [
+            {"hour_bucket": h, "occurrence_count": v["count"], "total_duration": round(v["duration"], 2)}
+            for h, v in sorted(hourly.items())
+        ]
+
+    async def get_trend_timeseries_by_client(
+        self, db_id: str, start_time: float, end_time: float, client_addr: str
+    ) -> List[Dict[str, Any]]:
+        """Get hourly time series for a specific client IP."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, top_clients, occurrence_count, total_duration
+            FROM slow_query_trends
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+
+        hourly: Dict[float, Dict] = defaultdict(lambda: {"count": 0, "duration": 0.0})
+        for row in rows:
+            try:
+                clients = json.loads(row["top_clients"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for c in clients:
+                if c.get("client") == client_addr:
+                    total_occ = row["occurrence_count"] or 1
+                    proportion = c.get("count", 0) / total_occ
+                    hourly[row["hour_bucket"]]["count"] += c.get("count", 0)
+                    hourly[row["hour_bucket"]]["duration"] += (row["total_duration"] or 0) * proportion
+
+        return [
+            {"hour_bucket": h, "occurrence_count": v["count"], "total_duration": round(v["duration"], 2)}
+            for h, v in sorted(hourly.items())
+        ]
+
     # --- Health Scores ---
 
     async def insert_health_score(

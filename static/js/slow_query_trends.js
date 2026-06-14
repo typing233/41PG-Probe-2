@@ -4,8 +4,10 @@
     let databases = [];
     let currentDb = null;
     let currentRange = '24h';
+    let currentDimension = 'fingerprint';
     let chartCount = null;
     let chartDuration = null;
+    let chartDrilldown = null;
 
     async function init() {
         await loadDatabases();
@@ -42,12 +44,21 @@
             });
         });
 
+        document.querySelectorAll('.dim-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.dim-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentDimension = btn.dataset.dim;
+                loadDimensionData();
+            });
+        });
+
         document.getElementById('btn-compare').addEventListener('click', runCompare);
     }
 
     async function loadData() {
         if (!currentDb) return;
-        await Promise.all([loadTopPatterns(), loadTrendCharts()]);
+        await Promise.all([loadTopPatterns(), loadTrendCharts(), loadDimensionData()]);
     }
 
     async function loadTopPatterns() {
@@ -70,6 +81,27 @@
         }
     }
 
+    async function loadDimensionData() {
+        if (!currentDb) return;
+
+        let url;
+        if (currentDimension === 'fingerprint') {
+            url = `/api/trends/${currentDb}/top?range=${currentRange}&limit=20`;
+        } else if (currentDimension === 'user') {
+            url = `/api/trends/${currentDb}/by-user?range=${currentRange}&limit=20`;
+        } else if (currentDimension === 'client') {
+            url = `/api/trends/${currentDb}/by-client?range=${currentRange}&top_n=20`;
+        }
+
+        try {
+            const res = await fetch(url);
+            const json = await res.json();
+            renderDimensionTable(json);
+        } catch(e) {
+            console.error('Failed to load dimension data:', e);
+        }
+    }
+
     function renderTopPatterns(patterns) {
         const tbody = document.getElementById('top-patterns-tbody');
         if (!patterns || patterns.length === 0) {
@@ -77,7 +109,7 @@
             return;
         }
         tbody.innerHTML = patterns.map(p => `
-            <tr>
+            <tr class="clickable-row" data-dim="fingerprint" data-value="${p.fingerprint}">
                 <td class="col-query"><div class="query-preview">${escapeHtml((p.query_pattern || '').substring(0, 120))}</div></td>
                 <td>${(p.total_occurrences || 0).toLocaleString()}</td>
                 <td>${(p.total_time || 0).toFixed(1)}s</td>
@@ -85,6 +117,118 @@
                 <td>${(p.peak_duration || 0).toFixed(2)}s</td>
             </tr>
         `).join('');
+
+        tbody.querySelectorAll('.clickable-row').forEach(row => {
+            row.addEventListener('click', () => {
+                drilldown(row.dataset.dim, row.dataset.value);
+            });
+        });
+    }
+
+    function renderDimensionTable(json) {
+        const container = document.getElementById('dimension-table');
+        const data = json.data || json.patterns || [];
+
+        if (!data || data.length === 0) {
+            container.innerHTML = '<div class="empty-state">暂无数据</div>';
+            return;
+        }
+
+        let headers, rowFn;
+        if (currentDimension === 'fingerprint') {
+            headers = '<th>查询模式</th><th>出现次数</th><th>总耗时</th><th>平均耗时</th>';
+            rowFn = p => `
+                <tr class="clickable-row" data-dim="fingerprint" data-value="${p.fingerprint}">
+                    <td class="col-query"><div class="query-preview">${escapeHtml((p.query_pattern || '').substring(0, 100))}</div></td>
+                    <td>${(p.total_occurrences || 0).toLocaleString()}</td>
+                    <td>${(p.total_time || 0).toFixed(1)}s</td>
+                    <td>${(p.mean_duration || 0).toFixed(2)}s</td>
+                </tr>`;
+        } else if (currentDimension === 'user') {
+            headers = '<th>用户</th><th>出现次数</th><th>总耗时</th><th>活跃小时数</th>';
+            rowFn = p => `
+                <tr class="clickable-row" data-dim="user" data-value="${escapeHtml(p.user)}">
+                    <td><code>${escapeHtml(p.user)}</code></td>
+                    <td>${(p.total_occurrences || 0).toLocaleString()}</td>
+                    <td>${(p.total_time || 0).toFixed(1)}s</td>
+                    <td>${p.hours_active || 0}</td>
+                </tr>`;
+        } else if (currentDimension === 'client') {
+            headers = '<th>客户端 IP</th><th>出现次数</th><th>总耗时</th><th>活跃小时数</th>';
+            rowFn = p => {
+                const label = p.client === 'others'
+                    ? `others (${p.collapsed_count || '?'} 个 IP 合并)`
+                    : p.client;
+                return `
+                    <tr class="${p.client !== 'others' ? 'clickable-row' : ''}" data-dim="client" data-value="${escapeHtml(p.client)}">
+                        <td><code>${escapeHtml(label)}</code></td>
+                        <td>${(p.total_occurrences || 0).toLocaleString()}</td>
+                        <td>${(p.total_time || 0).toFixed(1)}s</td>
+                        <td>${p.hours_active || 0}</td>
+                    </tr>`;
+            };
+        }
+
+        container.innerHTML = `
+            <table class="data-table">
+                <thead><tr>${headers}</tr></thead>
+                <tbody>${data.map(rowFn).join('')}</tbody>
+            </table>`;
+
+        container.querySelectorAll('.clickable-row').forEach(row => {
+            row.addEventListener('click', () => {
+                drilldown(row.dataset.dim, row.dataset.value);
+            });
+        });
+    }
+
+    async function drilldown(dimension, value) {
+        if (!currentDb || !value || value === 'others') return;
+        try {
+            const params = new URLSearchParams({dimension, value, range: currentRange});
+            const res = await fetch(`/api/trends/${currentDb}/drilldown?${params}`);
+            const json = await res.json();
+            renderDrilldownChart(json, dimension, value);
+        } catch(e) {
+            console.error('Drilldown error:', e);
+        }
+    }
+
+    function renderDrilldownChart(json, dimension, value) {
+        const section = document.getElementById('drilldown-section');
+        section.style.display = 'block';
+        document.getElementById('drilldown-title').textContent =
+            `${dimension === 'fingerprint' ? '指纹' : dimension === 'user' ? '用户' : '客户端'}: ${value.substring(0, 40)}`;
+
+        const data = json.data || [];
+        if (!data.length) return;
+
+        const labels = data.map(d => formatHour(d.hour_bucket));
+        const counts = data.map(d => d.occurrence_count || 0);
+        const durations = data.map(d => d.total_duration || 0);
+
+        const ctx = document.getElementById('chart-drilldown').getContext('2d');
+        if (chartDrilldown) chartDrilldown.destroy();
+
+        chartDrilldown = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: '出现次数', data: counts, borderColor: '#4fc3f7', borderWidth: 2, fill: false, pointRadius: 1, tension: 0.3, yAxisID: 'y' },
+                    { label: '总耗时(s)', data: durations, borderColor: '#ce93d8', borderWidth: 2, fill: false, pointRadius: 1, tension: 0.3, yAxisID: 'y1' },
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: { legend: { labels: { color: '#8899a6' } } },
+                scales: {
+                    x: { ticks: { color: '#657786', maxTicksLimit: 12 }, grid: { color: '#1e2d3d' } },
+                    y: { position: 'left', ticks: { color: '#4fc3f7' }, grid: { color: '#1e2d3d' }, title: { display: true, text: '次数', color: '#4fc3f7' } },
+                    y1: { position: 'right', ticks: { color: '#ce93d8' }, grid: { drawOnChartArea: false }, title: { display: true, text: '耗时(s)', color: '#ce93d8' } },
+                }
+            }
+        });
     }
 
     function renderTrendCharts(data) {
