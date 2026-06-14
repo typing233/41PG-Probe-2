@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}PG-Probe - 仪表盘{% endblock %}
+
+{% block content %}
+<div class="db-tabs" id="db-tabs"></div>
+
+<div class="metrics-cards" id="metrics-cards">
+    <div class="card">
+        <div class="card-label">活跃连接</div>
+        <div class="card-value" id="val-active-conn">--</div>
+        <div class="card-sub" id="val-total-conn">总计: --</div>
+    </div>
+    <div class="card">
+        <div class="card-label">缓存命中率</div>
+        <div class="card-value" id="val-cache-hit">--%</div>
+    </div>
+    <div class="card">
+        <div class="card-label">TPS</div>
+        <div class="card-value" id="val-tps">--</div>
+    </div>
+    <div class="card">
+        <div class="card-label">数据库大小</div>
+        <div class="card-value" id="val-db-size">--</div>
+    </div>
+</div>
+
+<div class="chart-section">
+    <div class="chart-header">
+        <h3>连接数趋势</h3>
+        <div class="range-selector" data-chart="connections">
+            <button class="range-btn active" data-range="1h">1小时</button>
+            <button class="range-btn" data-range="6h">6小时</button>
+            <button class="range-btn" data-range="24h">24小时</button>
+            <button class="range-btn" data-range="7d">7天</button>
+        </div>
+    </div>
+    <canvas id="chart-connections" height="80"></canvas>
+</div>
+
+<div class="chart-section">
+    <div class="chart-header">
+        <h3>TPS 与缓存命中率</h3>
+        <div class="range-selector" data-chart="tps-cache">
+            <button class="range-btn active" data-range="1h">1小时</button>
+            <button class="range-btn" data-range="6h">6小时</button>
+            <button class="range-btn" data-range="24h">24小时</button>
+            <button class="range-btn" data-range="7d">7天</button>
+        </div>
+    </div>
+    <canvas id="chart-tps-cache" height="80"></canvas>
+</div>
+
+<div class="chart-section">
+    <div class="chart-header">
+        <h3>Top 表大小</h3>
+    </div>
+    <canvas id="chart-tables" height="100"></canvas>
+</div>
+
+<div class="circuit-status" id="circuit-status"></div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js"></script>
+{% endblock %}

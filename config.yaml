@@ -1,0 +1,32 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  debug: false
+
+databases:
+  - id: "example_db"
+    host: "localhost"
+    port: 5432
+    database: "postgres"
+    user: "monitor_ro"
+    password: "changeme"
+    ssl: false
+    pool:
+      min_size: 1
+      max_size: 5
+      command_timeout: 10
+
+collection:
+  metrics_interval: 15
+  slow_query_interval: 5
+  slow_query_threshold: 1.0
+  top_tables_limit: 20
+  retention_hours: 168
+
+circuit_breaker:
+  failure_threshold: 5
+  recovery_timeout: 60
+  success_threshold: 2
+
+sqlite:
+  path: "./data/pgprobe.db"

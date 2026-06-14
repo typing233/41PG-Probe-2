@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}PG-Probe{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">PG-Probe</div>
+        <div class="nav-links">
+            <a href="/dashboard" class="{% if active_page == 'dashboard' %}active{% endif %}">仪表盘</a>
+            <a href="/slow-queries" class="{% if active_page == 'slow_queries' %}active{% endif %}">慢查询</a>
+        </div>
+        <div class="nav-status" id="ws-status">
+            <span class="status-dot disconnected"></span>
+            <span class="status-text">未连接</span>
+        </div>
+    </nav>
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+    <script>
+        const WS_URL = `ws://${window.location.host}/ws`;
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
