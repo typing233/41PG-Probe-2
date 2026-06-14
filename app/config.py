@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
@@ -67,12 +67,69 @@ class SQLiteConfig(BaseModel):
     path: str = "./data/pgprobe.db"
 
 
+class IndexAnalysisConfig(BaseModel):
+    enabled: bool = True
+    collection_interval: int = 300
+    analysis_interval: int = 3600
+    min_index_size_bytes: int = 8192
+    low_scan_threshold: int = 50
+
+
+class MissingIndexConfig(BaseModel):
+    enabled: bool = True
+    analysis_interval: int = 3600
+    min_seq_scan_count: int = 100
+    min_seq_tup_read: int = 10000
+    top_queries_limit: int = 50
+
+
+class SlowQueryTrendsConfig(BaseModel):
+    enabled: bool = True
+    aggregation_interval: int = 3600
+    top_n_clients: int = 10
+
+
+class HealthScoreConfig(BaseModel):
+    enabled: bool = True
+    compute_interval: int = 60
+    weights: Dict[str, float] = Field(default_factory=lambda: {
+        "connections": 0.15,
+        "cache_hit": 0.15,
+        "tps_stability": 0.10,
+        "replication_lag": 0.10,
+        "bloat": 0.15,
+        "index_health": 0.15,
+        "slow_query_rate": 0.20,
+    })
+    thresholds: Dict[str, Dict[str, float]] = Field(default_factory=lambda: {
+        "connections_pct": {"warning": 70, "critical": 90},
+        "cache_hit": {"warning": 95, "critical": 85},
+        "tps_drop_pct": {"warning": 30, "critical": 60},
+        "replication_lag_seconds": {"warning": 10, "critical": 60},
+        "bloat_ratio": {"warning": 0.3, "critical": 0.5},
+        "unused_index_pct": {"warning": 20, "critical": 40},
+        "slow_query_rate_per_min": {"warning": 5, "critical": 20},
+    })
+
+
+class AlertConfig(BaseModel):
+    enabled: bool = True
+    consecutive_violations: int = 3
+    suppression_window: int = 300
+    max_alerts_per_hour: int = 20
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = ServerConfig()
     databases: List[DatabaseConfig] = []
     collection: CollectionConfig = CollectionConfig()
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
     sqlite: SQLiteConfig = SQLiteConfig()
+    index_analysis: IndexAnalysisConfig = IndexAnalysisConfig()
+    missing_index: MissingIndexConfig = MissingIndexConfig()
+    slow_query_trends: SlowQueryTrendsConfig = SlowQueryTrendsConfig()
+    health_score: HealthScoreConfig = HealthScoreConfig()
+    alerts: AlertConfig = AlertConfig()
 
 
 def load_config(path: str = "config.yaml") -> AppConfig:

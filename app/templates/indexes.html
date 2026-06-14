@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}索引管理 - PG-Probe{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>索引管理</h2>
+    <div class="header-controls">
+        <select id="db-select" class="form-select"></select>
+        <select id="category-filter" class="form-select">
+            <option value="">全部类别</option>
+            <option value="redundant">冗余索引</option>
+            <option value="unused">未使用索引</option>
+            <option value="mergeable">可合并索引</option>
+            <option value="low_freq_critical">低频关键索引</option>
+        </select>
+    </div>
+</div>
+
+<div class="stats-bar" id="index-summary">
+    <div class="stat-item"><span class="stat-value" id="total-indexes">--</span><span class="stat-label">总索引数</span></div>
+    <div class="stat-item"><span class="stat-value" id="total-recs">--</span><span class="stat-label">建议数</span></div>
+    <div class="stat-item"><span class="stat-value" id="savings-est">--</span><span class="stat-label">可释放空间</span></div>
+</div>
+
+<div class="section">
+    <h3>优化建议</h3>
+    <div id="recommendations-list" class="rec-list"></div>
+    <div id="no-recs" class="empty-state" style="display:none">暂无优化建议</div>
+</div>
+
+<div class="section">
+    <h3>索引统计</h3>
+    <div class="table-wrapper">
+        <table class="data-table" id="index-table">
+            <thead>
+                <tr>
+                    <th>索引名</th>
+                    <th>表</th>
+                    <th>大小</th>
+                    <th>扫描次数</th>
+                    <th>类型</th>
+                    <th>写入开销</th>
+                </tr>
+            </thead>
+            <tbody id="index-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div id="ddl-modal" class="modal" style="display:none">
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="modal-title">DDL</h3>
+            <button class="btn-close" id="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="ddl-section">
+                <label>删除语句</label>
+                <pre id="modal-drop-ddl" class="code-block"></pre>
+            </div>
+            <div class="ddl-section">
+                <label>回滚语句</label>
+                <pre id="modal-rollback-ddl" class="code-block"></pre>
+            </div>
+            <div class="ddl-section">
+                <label>原因</label>
+                <p id="modal-reason"></p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/indexes.js"></script>
+{% endblock %}

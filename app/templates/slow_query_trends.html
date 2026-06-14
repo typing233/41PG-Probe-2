@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}慢查询趋势 - PG-Probe{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>慢查询趋势</h2>
+    <div class="header-controls">
+        <select id="db-select" class="form-select"></select>
+        <div class="range-selector">
+            <button class="range-btn active" data-range="24h">24小时</button>
+            <button class="range-btn" data-range="7d">7天</button>
+            <button class="range-btn" data-range="30d">30天</button>
+        </div>
+    </div>
+</div>
+
+<div class="section">
+    <h3>查询模式 Top N</h3>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>查询模式</th>
+                    <th>出现次数</th>
+                    <th>总耗时</th>
+                    <th>平均耗时</th>
+                    <th>峰值耗时</th>
+                </tr>
+            </thead>
+            <tbody id="top-patterns-tbody"></tbody>
+        </table>
+    </div>
+</div>
+
+<div class="section">
+    <h3>趋势图</h3>
+    <div class="chart-container">
+        <canvas id="chart-trend-count"></canvas>
+    </div>
+    <div class="chart-container">
+        <canvas id="chart-trend-duration"></canvas>
+    </div>
+</div>
+
+<div class="section">
+    <h3>时段对比</h3>
+    <div class="compare-controls">
+        <div class="compare-group">
+            <label>时段一</label>
+            <input type="datetime-local" id="range1-start" class="form-input">
+            <span>~</span>
+            <input type="datetime-local" id="range1-end" class="form-input">
+        </div>
+        <div class="compare-group">
+            <label>时段二</label>
+            <input type="datetime-local" id="range2-start" class="form-input">
+            <span>~</span>
+            <input type="datetime-local" id="range2-end" class="form-input">
+        </div>
+        <button id="btn-compare" class="btn btn-primary">对比</button>
+    </div>
+    <div id="compare-results" class="compare-grid" style="display:none">
+        <div class="compare-col">
+            <h4>时段一</h4>
+            <div id="compare-data1"></div>
+        </div>
+        <div class="compare-col">
+            <h4>时段二</h4>
+            <div id="compare-data2"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/slow_query_trends.js"></script>
+{% endblock %}

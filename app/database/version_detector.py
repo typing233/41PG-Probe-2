@@ -13,6 +13,8 @@ class VersionDetector:
             "pg_stat_statements_v1_8": False,
             "wait_events": True,
             "query_id_in_activity": False,
+            "is_standby": False,
+            "has_replication": False,
         }
 
         try:
@@ -44,6 +46,19 @@ class VersionDetector:
                 logger.info(f"[{conn.db_id}] pg_stat_statements available")
         except Exception:
             logger.info(f"[{conn.db_id}] pg_stat_statements not accessible")
+
+        try:
+            rows = await conn.execute_query("SELECT pg_is_in_recovery() AS is_standby")
+            if rows and rows[0]["is_standby"]:
+                capabilities["is_standby"] = True
+            else:
+                rep_rows = await conn.execute_query(
+                    "SELECT 1 FROM pg_stat_replication LIMIT 1"
+                )
+                if rep_rows:
+                    capabilities["has_replication"] = True
+        except Exception:
+            pass
 
         conn.capabilities = capabilities
         return capabilities

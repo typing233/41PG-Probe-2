@@ -14,6 +14,9 @@
         <div class="nav-links">
             <a href="/dashboard" class="{% if active_page == 'dashboard' %}active{% endif %}">仪表盘</a>
             <a href="/slow-queries" class="{% if active_page == 'slow_queries' %}active{% endif %}">慢查询</a>
+            <a href="/slow-query-trends" class="{% if active_page == 'slow_query_trends' %}active{% endif %}">趋势</a>
+            <a href="/indexes" class="{% if active_page == 'indexes' %}active{% endif %}">索引管理</a>
+            <a href="/health" class="{% if active_page == 'health' %}active{% endif %}">健康评分</a>
         </div>
         <div class="nav-status" id="ws-status">
             <span class="status-dot disconnected"></span>

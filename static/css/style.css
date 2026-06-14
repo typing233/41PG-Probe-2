@@ -289,3 +289,312 @@ body {
 }
 .modal-meta span { display: block; }
 .modal-meta .label { color: #657786; font-size: 11px; }
+
+/* ==============================================
+   New pages: Indexes, Trends, Health
+   ============================================== */
+
+/* Page Header */
+.page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+.page-header h2 { font-size: 20px; color: #e1e8ed; }
+.header-controls { display: flex; gap: 12px; align-items: center; }
+
+.form-select, .form-input {
+    background: #0f1419;
+    border: 1px solid #2d3d50;
+    border-radius: 6px;
+    color: #e1e8ed;
+    padding: 6px 12px;
+    font-size: 13px;
+}
+
+/* Stats Bar */
+.stats-bar {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: #1a2332;
+    border: 1px solid #2d3d50;
+    border-radius: 10px;
+}
+.stat-item { text-align: center; }
+.stat-value { font-size: 24px; font-weight: 700; color: #4fc3f7; display: block; }
+.stat-label { font-size: 12px; color: #8899a6; }
+
+/* Section */
+.section {
+    background: #1a2332;
+    border: 1px solid #2d3d50;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+.section h3 { font-size: 15px; color: #e1e8ed; margin-bottom: 16px; }
+
+/* Data Table */
+.table-wrapper { overflow-x: auto; }
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.data-table th {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid #2d3d50;
+    color: #8899a6;
+    font-weight: 600;
+}
+.data-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #1e2d3d;
+    color: #b0bec5;
+}
+.data-table tr:hover { background: #0f1419; }
+.data-table code { font-size: 12px; color: #ce93d8; }
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #253341;
+    color: #8899a6;
+}
+.badge-primary { background: #1e3a4f; color: #4fc3f7; }
+.badge-unique { background: #2d1f4e; color: #ce93d8; }
+.badge-high, .badge-critical { background: #3d1515; color: #ef5350; }
+.badge-medium, .badge-warning { background: #3d2d15; color: #ffb74d; }
+.badge-low { background: #1a3d1a; color: #81c784; }
+
+/* Recommendation Cards */
+.rec-list { display: flex; flex-direction: column; gap: 12px; }
+.rec-card {
+    padding: 16px;
+    border-radius: 8px;
+    border-left: 4px solid #4fc3f7;
+    background: #0f1419;
+}
+.rec-card.risk-high { border-left-color: #ef5350; }
+.rec-card.risk-medium { border-left-color: #ffb74d; }
+.rec-card.risk-low { border-left-color: #81c784; }
+
+.rec-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.rec-index { font-weight: 600; color: #e1e8ed; font-family: monospace; font-size: 13px; }
+.rec-detail { font-size: 12px; color: #657786; margin-bottom: 6px; display: flex; gap: 16px; }
+.rec-reason { font-size: 13px; color: #8899a6; margin-bottom: 10px; }
+.rec-actions { display: flex; gap: 8px; }
+
+/* Buttons */
+.btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid #2d3d50;
+    background: transparent;
+    color: #e1e8ed;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.btn:hover { border-color: #4fc3f7; color: #4fc3f7; }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.btn-primary { border-color: #4fc3f7; color: #4fc3f7; }
+.btn-primary:hover { background: #1e3a4f; }
+.btn-dismiss { color: #657786; }
+.btn-dismiss:hover { color: #f44336; border-color: #f44336; }
+.btn-close {
+    background: none;
+    border: none;
+    color: #8899a6;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+/* Modal (generic) */
+.modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal .modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.7); }
+.modal .modal-content {
+    position: relative;
+    background: #1a2332;
+    border: 1px solid #2d3d50;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 700px;
+    max-height: 80vh;
+    overflow: auto;
+}
+.modal .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid #2d3d50;
+}
+.modal .modal-body { padding: 20px; }
+.code-block {
+    background: #0f1419;
+    padding: 12px;
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #81c784;
+    margin: 8px 0;
+}
+.ddl-section { margin-bottom: 16px; }
+.ddl-section label { font-size: 12px; color: #8899a6; display: block; margin-bottom: 4px; }
+
+/* Empty state */
+.empty-state {
+    text-align: center;
+    color: #657786;
+    padding: 40px;
+    font-size: 14px;
+}
+
+/* Chart container */
+.chart-container {
+    margin-bottom: 16px;
+}
+
+/* ==============================================
+   Slow Query Trends
+   ============================================== */
+.compare-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    align-items: flex-end;
+    margin-bottom: 16px;
+}
+.compare-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.compare-group label {
+    font-size: 12px;
+    color: #8899a6;
+    min-width: 40px;
+}
+.compare-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+.compare-col h4 { font-size: 14px; color: #8899a6; margin-bottom: 8px; }
+.compare-item {
+    padding: 10px 12px;
+    background: #0f1419;
+    border-radius: 6px;
+    margin-bottom: 8px;
+}
+.compare-query {
+    font-family: monospace;
+    font-size: 12px;
+    color: #b0bec5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.compare-stats { font-size: 11px; color: #657786; margin-top: 4px; }
+
+/* ==============================================
+   Health Score Page
+   ============================================== */
+.health-overview {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+.score-gauge {
+    position: relative;
+    width: 200px;
+    text-align: center;
+}
+.gauge-label {
+    position: absolute;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+}
+.gauge-value { font-size: 36px; font-weight: 700; color: #4fc3f7; display: block; }
+.gauge-text { font-size: 12px; color: #8899a6; }
+
+.dimensions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 12px;
+    flex: 1;
+}
+.dim-card {
+    padding: 16px 12px;
+    border-radius: 8px;
+    text-align: center;
+    background: #0f1419;
+    border: 1px solid #2d3d50;
+}
+.dim-card.dim-good { border-color: #4caf50; }
+.dim-card.dim-warn { border-color: #ffb74d; }
+.dim-card.dim-bad { border-color: #ef5350; }
+.dim-score { font-size: 22px; font-weight: 700; color: #e1e8ed; }
+.dim-label { font-size: 11px; color: #8899a6; margin-top: 4px; }
+
+/* Anomalies */
+.anomalies-list { display: flex; flex-direction: column; gap: 8px; }
+.anomaly-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: #0f1419;
+}
+.anomaly-item.anomaly-critical { border-left: 3px solid #ef5350; }
+.anomaly-item.anomaly-warning { border-left: 3px solid #ffb74d; }
+.anomaly-badge {
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 700;
+}
+.anomaly-critical .anomaly-badge { background: #3d1515; color: #ef5350; }
+.anomaly-warning .anomaly-badge { background: #3d2d15; color: #ffb74d; }
+.anomaly-msg { font-size: 13px; color: #b0bec5; }
+
+/* Severity in alerts table */
+.severity-critical { background: #3d1515; color: #ef5350; }
+.severity-warning { background: #3d2d15; color: #ffb74d; }
+.row-acked { opacity: 0.6; }
+.ack-done { color: #657786; font-size: 12px; }
+
+/* Query preview reuse */
+.query-preview {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 400px;
+    font-family: monospace;
+    font-size: 12px;
+    color: #b0bec5;
+}

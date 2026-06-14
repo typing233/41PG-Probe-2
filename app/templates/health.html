@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}健康评分 - PG-Probe{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h2>健康评分</h2>
+    <div class="header-controls">
+        <select id="db-select" class="form-select"></select>
+        <div class="range-selector">
+            <button class="range-btn" data-range="1h">1小时</button>
+            <button class="range-btn" data-range="6h">6小时</button>
+            <button class="range-btn active" data-range="24h">24小时</button>
+            <button class="range-btn" data-range="7d">7天</button>
+        </div>
+    </div>
+</div>
+
+<div class="health-overview">
+    <div class="score-gauge" id="score-gauge">
+        <canvas id="gauge-chart" width="200" height="200"></canvas>
+        <div class="gauge-label">
+            <span class="gauge-value" id="gauge-value">--</span>
+            <span class="gauge-text">综合评分</span>
+        </div>
+    </div>
+    <div class="dimensions-grid" id="dimensions-grid"></div>
+</div>
+
+<div class="section">
+    <h3>异常检测</h3>
+    <div id="anomalies-container" class="anomalies-list">
+        <div class="empty-state">当前无异常</div>
+    </div>
+</div>
+
+<div class="section">
+    <h3>评分趋势</h3>
+    <div class="chart-container">
+        <canvas id="chart-health-history"></canvas>
+    </div>
+</div>
+
+<div class="section">
+    <h3>告警历史</h3>
+    <div class="table-wrapper">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>时间</th>
+                    <th>维度</th>
+                    <th>严重程度</th>
+                    <th>消息</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="alerts-tbody"></tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="/static/js/health.js"></script>
+{% endblock %}

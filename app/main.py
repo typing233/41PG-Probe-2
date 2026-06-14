@@ -19,6 +19,7 @@ from app.database.sqlite_store import SQLiteStore
 from app.collector.scheduler import CollectorScheduler
 from app.api.websocket_handler import WebSocketBroadcaster
 from app.api import router_dashboard, router_slow_queries
+from app.api import router_index, router_trends, router_health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -121,6 +122,9 @@ async def lifespan(app: FastAPI):
 
     router_dashboard.init_router(conn_manager, scheduler, store, config_manager)
     router_slow_queries.init_router(store)
+    router_index.init_router(store, scheduler)
+    router_trends.init_router(store)
+    router_health.init_router(store, scheduler)
 
     logger.info("PG-Probe started successfully")
     yield
@@ -142,6 +146,9 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "tem
 
 app.include_router(router_dashboard.router)
 app.include_router(router_slow_queries.router)
+app.include_router(router_index.router)
+app.include_router(router_trends.router)
+app.include_router(router_health.router)
 
 
 @app.get("/", response_class=RedirectResponse)
@@ -157,6 +164,21 @@ async def dashboard_page(request: Request):
 @app.get("/slow-queries", response_class=HTMLResponse)
 async def slow_queries_page(request: Request):
     return templates.TemplateResponse("slow_queries.html", {"request": request, "active_page": "slow_queries"})
+
+
+@app.get("/indexes", response_class=HTMLResponse)
+async def indexes_page(request: Request):
+    return templates.TemplateResponse("indexes.html", {"request": request, "active_page": "indexes"})
+
+
+@app.get("/slow-query-trends", response_class=HTMLResponse)
+async def slow_query_trends_page(request: Request):
+    return templates.TemplateResponse("slow_query_trends.html", {"request": request, "active_page": "slow_query_trends"})
+
+
+@app.get("/health", response_class=HTMLResponse)
+async def health_page(request: Request):
+    return templates.TemplateResponse("health.html", {"request": request, "active_page": "health"})
 
 
 @app.websocket("/ws")
