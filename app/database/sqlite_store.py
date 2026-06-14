@@ -161,14 +161,14 @@ class SQLiteStore:
                           duration_seconds, captured_at, query_start,
                           wait_event_type, wait_event, pid
                    FROM slow_queries
-                   WHERE db_id = ? AND captured_at >= ? AND duration_seconds >= ?"""
+                   WHERE db_id = ? AND query_start >= ? AND duration_seconds >= ?"""
         params: list = [db_id, since, min_duration]
 
         if search:
             query += " AND query_text LIKE ?"
             params.append(f"%{search}%")
 
-        query += " ORDER BY captured_at DESC LIMIT ?"
+        query += " ORDER BY query_start DESC LIMIT ?"
         params.append(limit)
 
         cursor = await self._db.execute(query, params)

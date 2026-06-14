@@ -1,15 +1,18 @@
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from app.config import AppConfig
+from app.config import AppConfig, CollectionConfig
 from app.database.connection_manager import ConnectionManager, DatabaseConnection
 from app.database.circuit_breaker import CircuitOpenError
+from app.database.version_detector import VersionDetector
 from app.database.sqlite_store import SQLiteStore
 from app.collector.metrics_collector import MetricsCollector
 from app.collector.slow_query_collector import SlowQueryCollector
 
 logger = logging.getLogger(__name__)
+
+RECONNECT_INTERVAL = 30
 
 
 class CollectorScheduler:
@@ -35,6 +38,9 @@ class CollectorScheduler:
     def latest_metrics(self) -> Dict[str, Dict[str, Any]]:
         return self._latest_metrics
 
+    def update_config(self, new_config: AppConfig):
+        self.config = new_config
+
     async def start(self):
         for db_id, conn in self.conn_manager.connections.items():
             self._start_db_tasks(db_id, conn)
@@ -50,25 +56,47 @@ class CollectorScheduler:
         self._slow_query_collectors[db_id] = sq
 
         self._metrics_tasks[db_id] = asyncio.create_task(
-            self._metrics_loop(db_id, mc)
+            self._metrics_loop(db_id, conn, mc)
         )
         self._slow_query_tasks[db_id] = asyncio.create_task(
-            self._slow_query_loop(db_id, sq)
+            self._slow_query_loop(db_id, conn, sq)
         )
 
-    async def _metrics_loop(self, db_id: str, collector: MetricsCollector):
-        interval = self.config.collection.metrics_interval
+    async def _try_reconnect(self, db_id: str, conn: DatabaseConnection) -> bool:
+        if conn.is_connected:
+            return True
+        try:
+            await conn.ensure_connected()
+            if conn.is_connected:
+                detector = VersionDetector()
+                await detector.detect(conn)
+                logger.info(f"[{db_id}] Reconnected, PG{conn.pg_version}")
+                return True
+        except Exception as e:
+            logger.debug(f"[{db_id}] Reconnect attempt failed: {e}")
+        return False
+
+    async def _metrics_loop(
+        self, db_id: str, conn: DatabaseConnection, collector: MetricsCollector
+    ):
         table_counter = 0
-        table_interval = max(interval * 4, 60)
 
         while True:
+            interval = self.config.collection.metrics_interval
+            table_interval = max(interval * 4, 60)
+
+            if not conn.is_connected:
+                if not await self._try_reconnect(db_id, conn):
+                    await asyncio.sleep(RECONNECT_INTERVAL)
+                    continue
+
             try:
                 metrics = await collector.collect()
                 self._latest_metrics[db_id] = metrics
 
                 table_counter += interval
                 if table_counter >= table_interval:
-                    tables = await collector.collect_top_tables(
+                    await collector.collect_top_tables(
                         self.config.collection.top_tables_limit
                     )
                     table_counter = 0
@@ -85,11 +113,18 @@ class CollectorScheduler:
 
             await asyncio.sleep(interval)
 
-    async def _slow_query_loop(self, db_id: str, collector: SlowQueryCollector):
-        interval = self.config.collection.slow_query_interval
-
+    async def _slow_query_loop(
+        self, db_id: str, conn: DatabaseConnection, collector: SlowQueryCollector
+    ):
         while True:
+            interval = self.config.collection.slow_query_interval
+
+            if not conn.is_connected:
+                await asyncio.sleep(RECONNECT_INTERVAL)
+                continue
+
             try:
+                collector.threshold = self.config.collection.slow_query_threshold
                 await collector.collect()
             except CircuitOpenError:
                 logger.debug(f"[{db_id}] Skipping slow query sample (circuit open)")

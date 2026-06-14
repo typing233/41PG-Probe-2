@@ -38,32 +38,59 @@ class MetricsCollector:
     async def collect_top_tables(self, limit: int = 20) -> List[Dict[str, Any]]:
         query = """
             SELECT
-                schemaname AS schema_name,
-                relname AS table_name,
-                pg_total_relation_size(quote_ident(schemaname) || '.' || quote_ident(relname)) AS total_size,
-                pg_relation_size(quote_ident(schemaname) || '.' || quote_ident(relname)) AS table_size,
-                pg_indexes_size(quote_ident(schemaname) || '.' || quote_ident(relname)) AS indexes_size
-            FROM pg_stat_user_tables
-            ORDER BY pg_total_relation_size(quote_ident(schemaname) || '.' || quote_ident(relname)) DESC
+                n.nspname AS schema_name,
+                c.relname AS table_name,
+                pg_total_relation_size(c.oid) AS total_size,
+                pg_relation_size(c.oid) AS table_size,
+                pg_indexes_size(c.oid) AS indexes_size
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'r'
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY pg_total_relation_size(c.oid) DESC
             LIMIT $1
         """
         try:
             rows = await self.conn.execute_query(query, limit)
-            tables = [
-                {
-                    "schema_name": r["schema_name"],
-                    "table_name": r["table_name"],
-                    "total_size": r["total_size"],
-                    "table_size": r["table_size"],
-                    "indexes_size": r["indexes_size"],
-                }
-                for r in rows
-            ]
-            await self.store.insert_top_tables(self.conn.db_id, tables)
-            return tables
         except Exception as e:
-            logger.warning(f"[{self.conn.db_id}] Failed to collect top tables: {e}")
-            return []
+            rows = await self._collect_top_tables_fallback(limit)
+            if rows is None:
+                logger.warning(f"[{self.conn.db_id}] Failed to collect top tables: {e}")
+                return []
+
+        tables = [
+            {
+                "schema_name": r["schema_name"],
+                "table_name": r["table_name"],
+                "total_size": r["total_size"] or 0,
+                "table_size": r["table_size"] or 0,
+                "indexes_size": r["indexes_size"] or 0,
+            }
+            for r in rows
+        ]
+        if tables:
+            await self.store.insert_top_tables(self.conn.db_id, tables)
+        return tables
+
+    async def _collect_top_tables_fallback(self, limit: int):
+        query = """
+            SELECT
+                n.nspname AS schema_name,
+                c.relname AS table_name,
+                c.relpages * 8192::bigint AS total_size,
+                c.relpages * 8192::bigint AS table_size,
+                0::bigint AS indexes_size
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind = 'r'
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+            ORDER BY c.relpages DESC
+            LIMIT $1
+        """
+        try:
+            return await self.conn.execute_query(query, limit)
+        except Exception:
+            return None
 
     async def _collect_connections(self) -> Dict[str, Any]:
         query = """

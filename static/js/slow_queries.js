@@ -91,7 +91,7 @@
                 <td class="col-query"><div class="query-preview">${escapeHtml(q.query_text)}</div></td>
                 <td class="col-duration">${q.duration_seconds.toFixed(2)}s</td>
                 <td class="col-user">${q.username || '-'}</td>
-                <td class="col-time">${formatTimestamp(q.captured_at)}</td>
+                <td class="col-time">${formatTimestamp(q.query_start)}</td>
                 <td class="col-wait">${q.wait_event_type ? q.wait_event_type + '/' + q.wait_event : '-'}</td>
             </tr>
         `).join('');
@@ -105,10 +105,10 @@
         document.getElementById('modal-query-text').textContent = query.query_text;
         document.getElementById('modal-meta').innerHTML = `
             <div><span class="label">执行时间</span><span>${query.duration_seconds.toFixed(2)}s</span></div>
+            <div><span class="label">触发时间</span><span>${query.query_start ? formatTimestamp(query.query_start) : '-'}</span></div>
             <div><span class="label">用户</span><span>${query.username || '-'}</span></div>
             <div><span class="label">客户端</span><span>${query.client_addr || '-'}</span></div>
             <div><span class="label">采集时间</span><span>${formatTimestamp(query.captured_at)}</span></div>
-            <div><span class="label">查询开始</span><span>${query.query_start ? formatTimestamp(query.query_start) : '-'}</span></div>
             <div><span class="label">等待事件</span><span>${query.wait_event_type ? query.wait_event_type + '/' + query.wait_event : '-'}</span></div>
             <div><span class="label">PID</span><span>${query.pid || '-'}</span></div>
             <div><span class="label">指纹</span><span style="font-family:monospace;font-size:11px">${query.fingerprint}</span></div>

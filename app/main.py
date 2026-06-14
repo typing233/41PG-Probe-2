@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigFileHandler(FileSystemEventHandler):
-    def __init__(self, config_manager: ConfigManager, callback):
+    def __init__(self, config_manager: ConfigManager, loop: asyncio.AbstractEventLoop, coro_factory):
         self._config_manager = config_manager
-        self._callback = callback
+        self._loop = loop
+        self._coro_factory = coro_factory
         self._debounce_timer = None
         self._lock = threading.Lock()
 
@@ -41,14 +42,14 @@ class ConfigFileHandler(FileSystemEventHandler):
         with self._lock:
             if self._debounce_timer:
                 self._debounce_timer.cancel()
-            self._debounce_timer = threading.Timer(1.0, self._do_reload)
+            self._debounce_timer = threading.Timer(1.5, self._do_reload)
             self._debounce_timer.start()
 
     def _do_reload(self):
         logger.info("Config file changed, reloading...")
         new_config = self._config_manager.reload()
-        if new_config and self._callback:
-            self._callback(new_config)
+        if new_config:
+            asyncio.run_coroutine_threadsafe(self._coro_factory(new_config), self._loop)
 
 
 conn_manager = ConnectionManager()
@@ -65,27 +66,27 @@ async def _on_config_reload(new_config: AppConfig):
     current_ids = set(conn_manager.all_ids())
     new_ids = {db.id for db in new_config.databases}
 
+    # Add new databases
     for db_config in new_config.databases:
         if db_config.id not in current_ids:
-            logger.info(f"Adding new database: {db_config.id}")
+            logger.info(f"[hot-reload] Adding database: {db_config.id}")
             try:
                 conn = await conn_manager.add_database(db_config, new_config.circuit_breaker)
                 detector = VersionDetector()
                 await detector.detect(conn)
-                await scheduler.add_database(db_config.id, conn)
-            except Exception as e:
-                logger.error(f"Failed to add database {db_config.id}: {e}")
+            except Exception:
+                conn = conn_manager.register_database(db_config, new_config.circuit_breaker)
+            await scheduler.add_database(db_config.id, conn)
 
+    # Remove deleted databases
     for db_id in current_ids - new_ids:
-        logger.info(f"Removing database: {db_id}")
+        logger.info(f"[hot-reload] Removing database: {db_id}")
         await scheduler.remove_database(db_id)
         await conn_manager.remove_database(db_id)
 
-
-def _config_reload_sync(new_config: AppConfig):
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-        asyncio.run_coroutine_threadsafe(_on_config_reload(new_config), loop)
+    # Update scheduler config (intervals, thresholds, retention)
+    scheduler.update_config(new_config)
+    logger.info("[hot-reload] Configuration applied successfully")
 
 
 @asynccontextmanager
@@ -101,7 +102,8 @@ async def lifespan(app: FastAPI):
             await detector.detect(conn)
             logger.info(f"[{db_config.id}] PG{conn.pg_version}, capabilities: {conn.capabilities}")
         except Exception as e:
-            logger.error(f"Failed to connect to {db_config.id}: {e}")
+            logger.error(f"Failed to connect to {db_config.id}: {e} (will retry in background)")
+            conn = conn_manager.register_database(db_config, config_manager.config.circuit_breaker)
 
     scheduler = CollectorScheduler(
         conn_manager=conn_manager,
@@ -111,7 +113,8 @@ async def lifespan(app: FastAPI):
     )
     await scheduler.start()
 
-    config_handler = ConfigFileHandler(config_manager, _config_reload_sync)
+    loop = asyncio.get_running_loop()
+    config_handler = ConfigFileHandler(config_manager, loop, _on_config_reload)
     _observer = Observer()
     _observer.schedule(config_handler, path=".", recursive=False)
     _observer.start()

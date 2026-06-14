@@ -40,6 +40,10 @@ class DatabaseConnection:
         self.capabilities: Dict[str, bool] = {}
         self._initialized = False
 
+    @property
+    def is_connected(self) -> bool:
+        return self._initialized and self.pool is not None
+
     async def initialize(self):
         try:
             self.pool = await asyncpg.create_pool(
@@ -57,12 +61,26 @@ class DatabaseConnection:
             self._initialized = True
             logger.info(f"[{self.db_id}] Connection pool initialized")
         except Exception as e:
+            self._initialized = False
+            self.pool = None
             logger.error(f"[{self.db_id}] Failed to create pool: {e}")
             raise
+
+    async def ensure_connected(self) -> bool:
+        if self.is_connected:
+            return True
+        try:
+            await self.initialize()
+            return True
+        except Exception:
+            return False
 
     async def execute_query(
         self, query: str, *args, timeout: float = 10.0
     ) -> List[Dict[str, Any]]:
+        if not self.is_connected:
+            raise ConnectionError(f"Not connected to {self.db_id}")
+
         if not await self.circuit_breaker.can_execute():
             raise CircuitOpenError(f"Circuit open for {self.db_id}")
 
@@ -104,6 +122,13 @@ class ConnectionManager:
     ) -> DatabaseConnection:
         conn = DatabaseConnection(db_config, cb_config)
         await conn.initialize()
+        self.connections[db_config.id] = conn
+        return conn
+
+    def register_database(
+        self, db_config: DatabaseConfig, cb_config: CircuitBreakerConfig
+    ) -> DatabaseConnection:
+        conn = DatabaseConnection(db_config, cb_config)
         self.connections[db_config.id] = conn
         return conn
 
