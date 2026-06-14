@@ -10,6 +10,22 @@ from app.database.sqlite_store import SQLiteStore
 
 logger = logging.getLogger(__name__)
 
+# PostgreSQL reserved words that need quoting when used as identifiers
+_PG_RESERVED = frozenset({
+    "ALL", "ANALYSE", "ANALYZE", "AND", "ANY", "ARRAY", "AS", "ASC",
+    "ASYMMETRIC", "BOTH", "CASE", "CAST", "CHECK", "COLLATE", "COLUMN",
+    "CONSTRAINT", "CREATE", "CURRENT_CATALOG", "CURRENT_DATE",
+    "CURRENT_ROLE", "CURRENT_TIME", "CURRENT_TIMESTAMP", "CURRENT_USER",
+    "DEFAULT", "DEFERRABLE", "DESC", "DISTINCT", "DO", "ELSE", "END",
+    "EXCEPT", "FALSE", "FETCH", "FOR", "FOREIGN", "FROM", "GRANT",
+    "GROUP", "HAVING", "IN", "INITIALLY", "INTERSECT", "INTO", "LATERAL",
+    "LEADING", "LIMIT", "LOCALTIME", "LOCALTIMESTAMP", "NOT", "NULL",
+    "OFFSET", "ON", "ONLY", "OR", "ORDER", "PLACING", "PRIMARY",
+    "REFERENCES", "RETURNING", "SELECT", "SESSION_USER", "SOME",
+    "SYMMETRIC", "TABLE", "THEN", "TO", "TRAILING", "TRUE", "UNION",
+    "UNIQUE", "USER", "USING", "VARIADIC", "WHEN", "WHERE", "WINDOW", "WITH",
+})
+
 # SQL keywords that appear as identifiers in WHERE but aren't columns
 _SQL_KEYWORDS = frozenset({
     "AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "SELECT", "FROM",
@@ -17,6 +33,24 @@ _SQL_KEYWORDS = frozenset({
     "ALL", "CASE", "WHEN", "THEN", "ELSE", "END", "AS", "CAST",
     "INTERVAL", "CURRENT_TIMESTAMP", "NOW", "COALESCE", "NULLIF",
 })
+
+
+def _quote_ident(name: str) -> str:
+    """Quote a PostgreSQL identifier if it needs quoting.
+    Quotes when: contains uppercase, is a reserved word, contains special chars,
+    or starts with a digit."""
+    if not name:
+        return '""'
+    needs_quote = (
+        name.upper() in _PG_RESERVED
+        or not name.islower()
+        or not re.match(r'^[a-z_][a-z0-9_]*$', name)
+        or name[0].isdigit()
+    )
+    if needs_quote:
+        escaped = name.replace('"', '""')
+        return f'"{escaped}"'
+    return name
 
 
 class MissingIndexAnalyzer:
@@ -44,10 +78,32 @@ class MissingIndexAnalyzer:
 
         deduped = self._deduplicate(recommendations)
 
-        if deduped:
-            await self.store.save_missing_index_recommendations(db_id, deduped)
-        logger.info(f"[{db_id}] Missing index analysis: {len(deduped)} recommendations")
-        return deduped
+        # Verify with EXPLAIN: confirm Seq Scan exists for non-seq_scan source recommendations
+        verified = []
+        for rec in deduped:
+            if rec["source"] == "seq_scan":
+                verified.append(rec)
+            else:
+                fps = json.loads(rec.get("related_fingerprints", "[]"))
+                query_text = rec.get("_sample_query", "")
+                if query_text:
+                    has_seq = await self._verify_with_explain(conn, query_text)
+                    if has_seq:
+                        rec.pop("_sample_query", None)
+                        verified.append(rec)
+                    else:
+                        logger.debug(
+                            f"[{db_id}] Skipped rec for {rec['schema_name']}.{rec['table_name']}: "
+                            f"EXPLAIN shows no Seq Scan"
+                        )
+                else:
+                    rec.pop("_sample_query", None)
+                    verified.append(rec)
+
+        if verified:
+            await self.store.save_missing_index_recommendations(db_id, verified)
+        logger.info(f"[{db_id}] Missing index analysis: {len(verified)} recommendations")
+        return verified
 
     async def _analyze_seq_scans(self, conn: DatabaseConnection) -> List[Dict[str, Any]]:
         """Find tables with disproportionate seq scans, then identify likely
@@ -101,7 +157,11 @@ class MissingIndexAnalyzer:
 
             col_str = ", ".join(columns)
             idx_name = self._generate_index_name(table, columns)
-            create_ddl = f"CREATE INDEX CONCURRENTLY {idx_name} ON {schema}.{table} ({col_str});"
+            q_schema = _quote_ident(schema)
+            q_table = _quote_ident(table)
+            q_cols = ", ".join(_quote_ident(c) for c in columns)
+            q_idx = _quote_ident(idx_name)
+            create_ddl = f"CREATE INDEX CONCURRENTLY {q_idx} ON {q_schema}.{q_table} ({q_cols});"
 
             results.append({
                 "schema_name": schema,
@@ -207,7 +267,11 @@ class MissingIndexAnalyzer:
 
             col_str = ", ".join(valid_cols)
             idx_name = self._generate_index_name(table, valid_cols)
-            create_ddl = f"CREATE INDEX CONCURRENTLY {idx_name} ON {schema}.{table} ({col_str});"
+            q_schema = _quote_ident(schema)
+            q_table = _quote_ident(table)
+            q_cols = ", ".join(_quote_ident(c) for c in valid_cols)
+            q_idx = _quote_ident(idx_name)
+            create_ddl = f"CREATE INDEX CONCURRENTLY {q_idx} ON {q_schema}.{q_table} ({q_cols});"
 
             results.append({
                 "schema_name": schema,
@@ -224,6 +288,7 @@ class MissingIndexAnalyzer:
                 "related_fingerprints": json.dumps([str(r.get("queryid", ""))]),
                 "seq_scan_count": 0,
                 "seq_tup_read": 0,
+                "_sample_query": query_text,
             })
 
         return results
@@ -285,7 +350,11 @@ class MissingIndexAnalyzer:
 
             col_str = ", ".join(valid_cols)
             idx_name = self._generate_index_name(table, valid_cols)
-            create_ddl = f"CREATE INDEX CONCURRENTLY {idx_name} ON {schema}.{table} ({col_str});"
+            q_schema = _quote_ident(schema)
+            q_table = _quote_ident(table)
+            q_cols = ", ".join(_quote_ident(c) for c in valid_cols)
+            q_idx = _quote_ident(idx_name)
+            create_ddl = f"CREATE INDEX CONCURRENTLY {q_idx} ON {q_schema}.{q_table} ({q_cols});"
 
             related_fps = json.dumps([fp])
             results.append({
@@ -302,11 +371,56 @@ class MissingIndexAnalyzer:
                 "related_fingerprints": related_fps,
                 "seq_scan_count": 0,
                 "seq_tup_read": 0,
+                "_sample_query": query_text,
             })
 
         return results
 
     # ---- Helper methods ----
+
+    async def _verify_with_explain(self, conn: DatabaseConnection, query_text: str) -> bool:
+        """Run EXPLAIN (FORMAT JSON) on query to confirm Seq Scan or lack of index usage.
+        Returns True if the plan contains a Seq Scan node, indicating an index could help."""
+        try:
+            # Replace parameter placeholders with NULL so EXPLAIN can parse it
+            sanitized = re.sub(r'\$\d+', 'NULL', query_text)
+            sanitized = re.sub(r"'[^']*'", "'x'", sanitized)
+            # Remove LIMIT/OFFSET for plan clarity
+            sanitized = re.sub(r'\b(LIMIT|OFFSET)\s+\d+', '', sanitized, flags=re.IGNORECASE)
+
+            explain_query = f"EXPLAIN (FORMAT JSON) {sanitized}"
+            rows = await conn.execute_query(explain_query, timeout=5.0)
+            if not rows:
+                return True  # If EXPLAIN fails, assume it's worth recommending
+
+            plan_json = rows[0].get("QUERY PLAN") or rows[0].get("query plan")
+            if isinstance(plan_json, str):
+                plan_data = json.loads(plan_json)
+            elif isinstance(plan_json, list):
+                plan_data = plan_json
+            else:
+                return True
+
+            return self._plan_has_seq_scan(plan_data)
+        except Exception as e:
+            logger.debug(f"EXPLAIN verification failed: {e}")
+            return True  # Err on the side of recommending if EXPLAIN fails
+
+    def _plan_has_seq_scan(self, plan_data: Any) -> bool:
+        """Recursively check if the execution plan has any Seq Scan node."""
+        if isinstance(plan_data, list):
+            return any(self._plan_has_seq_scan(item) for item in plan_data)
+        if isinstance(plan_data, dict):
+            plan = plan_data.get("Plan", plan_data)
+            node_type = plan.get("Node Type", "")
+            if node_type == "Seq Scan":
+                return True
+            # Check sub-plans
+            for key in ("Plans", "Subplan"):
+                if key in plan:
+                    if self._plan_has_seq_scan(plan[key]):
+                        return True
+        return False
 
     async def _get_high_selectivity_columns(
         self, conn: DatabaseConnection, schema: str, table: str
@@ -507,6 +621,9 @@ class MissingIndexAnalyzer:
 
                 if r.get("estimated_benefit", 0) > existing.get("estimated_benefit", 0):
                     r["related_fingerprints"] = json.dumps(merged_fps)
+                    # Preserve _sample_query from winner
+                    if "_sample_query" not in r and "_sample_query" in existing:
+                        r["_sample_query"] = existing["_sample_query"]
                     seen[key] = r
                 else:
                     existing["related_fingerprints"] = json.dumps(merged_fps)

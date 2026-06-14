@@ -192,28 +192,19 @@ class HealthScorer:
         self, scores: Dict[str, float],
         metrics: Dict[str, Any], conn: DatabaseConnection
     ) -> List[Dict[str, Any]]:
-        """Detect anomalies using properly interpreted thresholds.
+        """Detect anomalies using configured thresholds per dimension.
 
-        Threshold semantics vary by dimension:
-        - cache_hit: {warning: 95, critical: 85} → score BELOW threshold triggers alert
-          (higher threshold = stricter, "warning at 95" means anything below 95% is a warning)
-        - connections_pct: {warning: 70, critical: 90} → raw usage ABOVE threshold triggers alert
-        - bloat_ratio: {warning: 0.3, critical: 0.5} → raw value ABOVE threshold triggers alert
-        - slow_query_rate_per_min: {warning: 5, critical: 20} → rate ABOVE threshold triggers alert
-        - replication_lag_seconds: {warning: 10, critical: 60} → lag ABOVE threshold triggers alert
-        - unused_index_pct: {warning: 20, critical: 40} → pct ABOVE threshold triggers alert
-        - tps_drop_pct: {warning: 30, critical: 60} → drop pct ABOVE threshold triggers alert
+        Each dimension's scoring function maps raw values to 0-100, where the
+        score reaches 0 exactly at the configured critical threshold and
+        starts descending at the warning threshold. We reverse-engineer:
+        - score at warning boundary = the point the scoring function would produce
+          when the raw value equals the warning threshold
+        - score at critical boundary = the point when raw value equals critical
 
-        We use the SCORE (0-100, higher = healthier) and compare against fixed
-        score thresholds derived from the config. The key insight:
-        - warning score = when the metric first enters warning territory
-        - critical score = when the metric is critically bad (score near 0)
+        For most dimensions: score < warning_score → warning, score < critical_score → critical
+        For cache_hit: score IS the ratio, compare directly to configured thresholds.
         """
         anomalies = []
-
-        # For each dimension, determine alert by score thresholds
-        # We define: critical alert if score < 20, warning if score < 50
-        # But we also cross-check with the configured thresholds for proper messaging
 
         dimension_labels = {
             "connections": "连接数",
@@ -225,37 +216,87 @@ class HealthScorer:
             "slow_query_rate": "慢查询率",
         }
 
-        # Anomaly detection uses the score itself:
-        # - The scoring functions already encode the threshold semantics
-        #   (e.g., cache_hit score IS the ratio, so score=90 with warning=95 means anomaly)
-        # - We apply two score-based severity levels:
+        # Define score thresholds per dimension based on how their scoring functions work:
+        # The scoring functions produce scores in [0, 100] using the configured thresholds.
+        # At the warning threshold → the score function produces a specific value.
+        # At the critical threshold → score = 0.
+        # We compute the "warning_score" for each dimension:
 
-        # cache_hit: warning threshold means "cache hit below X% is concerning"
-        #   So if score < warning_threshold → warning; if score < critical_threshold → critical
-        cache_warn = self.thresholds.get("cache_hit", {}).get("warning", 95)
-        cache_crit = self.thresholds.get("cache_hit", {}).get("critical", 85)
+        dim_score_thresholds = {}
 
-        # For other dimensions, we use fixed score bands since their scoring functions
-        # already translate raw values to 0-100 scores using the configured thresholds
+        # cache_hit: score = ratio itself. warning=95 means below 95 is warning.
+        cache_cfg = self.thresholds.get("cache_hit", {})
+        dim_score_thresholds["cache_hit"] = {
+            "warning_score": cache_cfg.get("warning", 95),
+            "critical_score": cache_cfg.get("critical", 85),
+        }
+
+        # connections: score = 100 - usage_pct. connections_pct: warning=70, critical=90
+        conn_cfg = self.thresholds.get("connections_pct", {})
+        conn_warn = conn_cfg.get("warning", 70)
+        conn_crit = conn_cfg.get("critical", 90)
+        dim_score_thresholds["connections"] = {
+            "warning_score": 100 - conn_warn,  # 30
+            "critical_score": 100 - conn_crit,  # 10
+        }
+
+        # tps_stability: score = 100 - CV. tps_drop_pct: warning=30, critical=60
+        tps_cfg = self.thresholds.get("tps_drop_pct", {})
+        tps_warn = tps_cfg.get("warning", 30)
+        tps_crit = tps_cfg.get("critical", 60)
+        dim_score_thresholds["tps_stability"] = {
+            "warning_score": 100 - tps_warn,  # 70
+            "critical_score": 100 - tps_crit,  # 40
+        }
+
+        # replication_lag: linear between warning and critical → score at warning = 100, at critical = 0
+        # At exactly warning threshold: score = 100 (still fine)
+        # Just above warning: score starts dropping
+        # At critical: score = 0
+        # Midpoint between warning and critical → score ≈ 50
+        dim_score_thresholds["replication_lag"] = {
+            "warning_score": 50,  # halfway between warning and critical
+            "critical_score": 10,
+        }
+
+        # bloat: below warning → score ≥ 70, at warning → 70, at critical → 0
+        # The function: if ratio >= critical: 0; if ratio >= warning: linear 100→0;
+        #   below warning: 70-100. So "entering warning" means score just hit 70.
+        bloat_cfg = self.thresholds.get("bloat_ratio", {})
+        dim_score_thresholds["bloat"] = {
+            "warning_score": 70,
+            "critical_score": 10,
+        }
+
+        # index_health: at warning pct → score starts dropping from 80
+        # at critical pct → score = 0
+        dim_score_thresholds["index_health"] = {
+            "warning_score": 50,
+            "critical_score": 10,
+        }
+
+        # slow_query_rate: at warning threshold → score starts dropping
+        # at critical → score = 0
+        dim_score_thresholds["slow_query_rate"] = {
+            "warning_score": 50,
+            "critical_score": 10,
+        }
 
         for dim, score in scores.items():
             label = dimension_labels.get(dim, dim)
             severity = None
 
-            if dim == "cache_hit":
-                # cache_hit score = the ratio itself; thresholds are ratio values
-                if score < cache_crit:
-                    severity = "critical"
-                elif score < cache_warn:
-                    severity = "warning"
-            else:
-                # For all other dimensions: scoring functions already map through thresholds
-                # Score < 20 → critical (means raw value exceeded critical threshold)
-                # Score < 50 → warning (means raw value exceeded warning threshold)
-                if score < 20:
-                    severity = "critical"
-                elif score < 50:
-                    severity = "warning"
+            thresholds = dim_score_thresholds.get(dim)
+            if not thresholds:
+                continue
+
+            critical_score = thresholds["critical_score"]
+            warning_score = thresholds["warning_score"]
+
+            if score <= critical_score:
+                severity = "critical"
+            elif score <= warning_score:
+                severity = "warning"
 
             if severity:
                 anomalies.append({

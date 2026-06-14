@@ -189,6 +189,13 @@
             const res = await fetch(`/api/trends/${currentDb}/drilldown?${params}`);
             const json = await res.json();
             renderDrilldownChart(json, dimension, value);
+
+            // For client dimension, also fetch top fingerprints
+            if (dimension === 'client') {
+                const fpRes = await fetch(`/api/trends/${currentDb}/client-fingerprints?client=${encodeURIComponent(value)}&range=${currentRange}`);
+                const fpJson = await fpRes.json();
+                renderClientFingerprints(fpJson.fingerprints, value);
+            }
         } catch(e) {
             console.error('Drilldown error:', e);
         }
@@ -299,6 +306,32 @@
                 <div class="compare-stats">次数: ${p.total_occurrences || 0} | 耗时: ${(p.total_time || 0).toFixed(1)}s</div>
             </div>
         `).join('');
+    }
+
+    function renderClientFingerprints(fingerprints, clientAddr) {
+        const section = document.getElementById('drilldown-section');
+        let fpDiv = document.getElementById('client-fp-breakdown');
+        if (!fpDiv) {
+            fpDiv = document.createElement('div');
+            fpDiv.id = 'client-fp-breakdown';
+            fpDiv.style.marginTop = '16px';
+            section.appendChild(fpDiv);
+        }
+        if (!fingerprints || fingerprints.length === 0) {
+            fpDiv.innerHTML = '<div class="empty-state">暂无指纹数据</div>';
+            return;
+        }
+        fpDiv.innerHTML = `
+            <h4 style="font-size:14px;color:#8899a6;margin-bottom:8px">客户端 ${escapeHtml(clientAddr)} 的主要查询模式</h4>
+            <table class="data-table">
+                <thead><tr><th>查询模式</th><th>出现次数</th></tr></thead>
+                <tbody>${fingerprints.map(fp => `
+                    <tr>
+                        <td class="col-query"><div class="query-preview">${escapeHtml((fp.query_pattern || fp.fingerprint).substring(0, 100))}</div></td>
+                        <td>${(fp.count || 0).toLocaleString()}</td>
+                    </tr>
+                `).join('')}</tbody>
+            </table>`;
     }
 
     function chartOpts(title) {

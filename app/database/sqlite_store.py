@@ -149,6 +149,18 @@ CREATE TABLE IF NOT EXISTS alert_history (
     acknowledged INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_alert_db_ts ON alert_history(db_id, triggered_at);
+
+CREATE TABLE IF NOT EXISTS client_trend_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    db_id TEXT NOT NULL,
+    hour_bucket REAL NOT NULL,
+    client_addr TEXT NOT NULL,
+    occurrence_count INTEGER DEFAULT 0,
+    total_duration REAL DEFAULT 0,
+    top_fingerprints TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_clienttrend_db_hour ON client_trend_stats(db_id, hour_bucket);
+CREATE INDEX IF NOT EXISTS idx_clienttrend_client ON client_trend_stats(db_id, client_addr, hour_bucket);
 """
 
 
@@ -313,6 +325,9 @@ class SQLiteStore:
         )
         await self._db.execute(
             "DELETE FROM alert_history WHERE triggered_at < ?", (cutoff,)
+        )
+        await self._db.execute(
+            "DELETE FROM client_trend_stats WHERE hour_bucket < ?", (cutoff,)
         )
         await self._db.commit()
         logger.info(f"Pruned data older than {retention_hours}h")
@@ -541,60 +556,6 @@ class SQLiteStore:
         result.sort(key=lambda x: x["total_time"], reverse=True)
         return result[:limit]
 
-    async def get_trends_by_client(
-        self, db_id: str, start_time: float, end_time: float,
-        top_n: int = 20
-    ) -> List[Dict[str, Any]]:
-        """Aggregate trend data by client IP, using top_clients JSON.
-        Groups low-frequency clients into 'others' to handle high cardinality."""
-        cursor = await self._db.execute(
-            """SELECT hour_bucket, top_clients, occurrence_count, total_duration
-            FROM slow_query_trends
-            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
-            ORDER BY hour_bucket ASC""",
-            (db_id, start_time, end_time),
-        )
-        rows = await cursor.fetchall()
-        import json
-        from collections import defaultdict
-        client_agg: Dict[str, Dict[str, Any]] = defaultdict(
-            lambda: {"total_occurrences": 0, "total_time": 0.0, "hours_active": 0}
-        )
-        for row in rows:
-            try:
-                clients = json.loads(row["top_clients"] or "[]")
-            except (json.JSONDecodeError, TypeError):
-                continue
-            total_occ = row["occurrence_count"] or 1
-            for c in clients:
-                addr = c.get("client", "unknown")
-                count = c.get("count", 0)
-                proportion = count / total_occ
-                client_agg[addr]["total_occurrences"] += count
-                client_agg[addr]["total_time"] += (row["total_duration"] or 0) * proportion
-                client_agg[addr]["hours_active"] += 1
-
-        result = sorted(
-            [{"client": k, **v} for k, v in client_agg.items()],
-            key=lambda x: x["total_time"], reverse=True,
-        )
-
-        # Collapse low-frequency clients into 'others' if exceeding top_n
-        if len(result) > top_n:
-            top_part = result[:top_n]
-            others = result[top_n:]
-            others_entry = {
-                "client": "others",
-                "total_occurrences": sum(o["total_occurrences"] for o in others),
-                "total_time": sum(o["total_time"] for o in others),
-                "hours_active": len(set().union(*(set() for _ in others))),  # approximate
-                "collapsed_count": len(others),
-            }
-            top_part.append(others_entry)
-            return top_part
-
-        return result
-
     async def get_trend_timeseries_by_user(
         self, db_id: str, start_time: float, end_time: float, username: str
     ) -> List[Dict[str, Any]]:
@@ -631,7 +592,32 @@ class SQLiteStore:
     async def get_trend_timeseries_by_client(
         self, db_id: str, start_time: float, end_time: float, client_addr: str
     ) -> List[Dict[str, Any]]:
-        """Get hourly time series for a specific client IP."""
+        """Get hourly time series for a specific client IP using pre-aggregated table."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, occurrence_count, total_duration, top_fingerprints
+            FROM client_trend_stats
+            WHERE db_id = ? AND client_addr = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, client_addr, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            return [
+                {
+                    "hour_bucket": row["hour_bucket"],
+                    "occurrence_count": row["occurrence_count"],
+                    "total_duration": round(row["total_duration"], 2),
+                    "top_fingerprints": row["top_fingerprints"],
+                }
+                for row in rows
+            ]
+        # Fallback to JSON parsing if pre-aggregated data not available yet
+        return await self._trend_timeseries_by_client_fallback(db_id, start_time, end_time, client_addr)
+
+    async def _trend_timeseries_by_client_fallback(
+        self, db_id: str, start_time: float, end_time: float, client_addr: str
+    ) -> List[Dict[str, Any]]:
+        """Fallback: parse JSON from slow_query_trends for backward compat."""
         cursor = await self._db.execute(
             """SELECT hour_bucket, top_clients, occurrence_count, total_duration
             FROM slow_query_trends
@@ -660,6 +646,175 @@ class SQLiteStore:
             {"hour_bucket": h, "occurrence_count": v["count"], "total_duration": round(v["duration"], 2)}
             for h, v in sorted(hourly.items())
         ]
+
+    # --- Client Trend Stats (pre-aggregated) ---
+
+    async def insert_client_trend_stats(self, rows: List[Dict[str, Any]]):
+        await self._db.executemany(
+            """INSERT INTO client_trend_stats
+            (db_id, hour_bucket, client_addr, occurrence_count, total_duration, top_fingerprints)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            [
+                (
+                    r["db_id"], r["hour_bucket"], r["client_addr"],
+                    r["occurrence_count"], r["total_duration"],
+                    r.get("top_fingerprints", "[]"),
+                )
+                for r in rows
+            ],
+        )
+        await self._db.commit()
+
+    async def get_client_top_fingerprints(
+        self, db_id: str, start_time: float, end_time: float, client_addr: str
+    ) -> List[Dict[str, Any]]:
+        """Aggregate top fingerprints for a client from pre-aggregated data."""
+        cursor = await self._db.execute(
+            """SELECT top_fingerprints
+            FROM client_trend_stats
+            WHERE db_id = ? AND client_addr = ? AND hour_bucket >= ? AND hour_bucket <= ?""",
+            (db_id, client_addr, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+
+        fp_agg: Dict[str, int] = defaultdict(int)
+        for row in rows:
+            try:
+                fps = json.loads(row["top_fingerprints"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            for item in fps:
+                fp_agg[item.get("fp", "")] += item.get("count", 0)
+
+        sorted_fps = sorted(fp_agg.items(), key=lambda x: x[1], reverse=True)[:20]
+
+        # Enrich with query pattern text from slow_query_trends
+        result = []
+        for fp, count in sorted_fps:
+            if not fp:
+                continue
+            pattern_cursor = await self._db.execute(
+                """SELECT query_pattern FROM slow_query_trends
+                WHERE db_id = ? AND fingerprint = ? LIMIT 1""",
+                (db_id, fp),
+            )
+            pat_row = await pattern_cursor.fetchone()
+            result.append({
+                "fingerprint": fp,
+                "count": count,
+                "query_pattern": pat_row["query_pattern"] if pat_row else "",
+            })
+
+        return result
+
+    async def get_trends_by_client(
+        self, db_id: str, start_time: float, end_time: float,
+        top_n: int = 20
+    ) -> List[Dict[str, Any]]:
+        """Aggregate trend data by client IP using pre-aggregated client_trend_stats."""
+        cursor = await self._db.execute(
+            """SELECT client_addr,
+                      SUM(occurrence_count) AS total_occurrences,
+                      SUM(total_duration) AS total_time,
+                      COUNT(DISTINCT hour_bucket) AS hours_active
+            FROM client_trend_stats
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            GROUP BY client_addr
+            ORDER BY total_time DESC
+            LIMIT ?""",
+            (db_id, start_time, end_time, top_n + 1),
+        )
+        rows = await cursor.fetchall()
+        result = [dict(row) for row in rows]
+
+        # Rename column
+        for r in result:
+            r["client"] = r.pop("client_addr")
+
+        if not result:
+            # Fallback to old JSON-based method
+            return await self._get_trends_by_client_fallback(db_id, start_time, end_time, top_n)
+
+        # Get the "others" count if there are more clients
+        if len(result) > top_n:
+            # We fetched top_n + 1 to detect overflow; get total remainder
+            cursor2 = await self._db.execute(
+                """SELECT COUNT(DISTINCT client_addr) AS cnt,
+                          SUM(occurrence_count) AS total_occ,
+                          SUM(total_duration) AS total_dur
+                FROM client_trend_stats
+                WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+                  AND client_addr NOT IN (
+                      SELECT client_addr FROM client_trend_stats
+                      WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+                      GROUP BY client_addr ORDER BY SUM(total_duration) DESC LIMIT ?
+                  )""",
+                (db_id, start_time, end_time, db_id, start_time, end_time, top_n),
+            )
+            others_row = await cursor2.fetchone()
+            result = result[:top_n]
+            if others_row and others_row["cnt"]:
+                result.append({
+                    "client": "others",
+                    "total_occurrences": others_row["total_occ"] or 0,
+                    "total_time": others_row["total_dur"] or 0,
+                    "hours_active": 0,
+                    "collapsed_count": others_row["cnt"],
+                })
+
+        return result
+
+    async def _get_trends_by_client_fallback(
+        self, db_id: str, start_time: float, end_time: float, top_n: int
+    ) -> List[Dict[str, Any]]:
+        """Fallback: parse JSON for backward compat with existing data."""
+        cursor = await self._db.execute(
+            """SELECT hour_bucket, top_clients, occurrence_count, total_duration
+            FROM slow_query_trends
+            WHERE db_id = ? AND hour_bucket >= ? AND hour_bucket <= ?
+            ORDER BY hour_bucket ASC""",
+            (db_id, start_time, end_time),
+        )
+        rows = await cursor.fetchall()
+        import json
+        from collections import defaultdict
+        client_agg: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"total_occurrences": 0, "total_time": 0.0, "hours_active": 0}
+        )
+        for row in rows:
+            try:
+                clients = json.loads(row["top_clients"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            total_occ = row["occurrence_count"] or 1
+            for c in clients:
+                addr = c.get("client", "unknown")
+                count = c.get("count", 0)
+                proportion = count / total_occ
+                client_agg[addr]["total_occurrences"] += count
+                client_agg[addr]["total_time"] += (row["total_duration"] or 0) * proportion
+                client_agg[addr]["hours_active"] += 1
+
+        result = sorted(
+            [{"client": k, **v} for k, v in client_agg.items()],
+            key=lambda x: x["total_time"], reverse=True,
+        )
+
+        if len(result) > top_n:
+            top_part = result[:top_n]
+            others = result[top_n:]
+            top_part.append({
+                "client": "others",
+                "total_occurrences": sum(o["total_occurrences"] for o in others),
+                "total_time": sum(o["total_time"] for o in others),
+                "hours_active": 0,
+                "collapsed_count": len(others),
+            })
+            return top_part
+
+        return result
 
     # --- Health Scores ---
 

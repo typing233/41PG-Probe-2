@@ -129,3 +129,19 @@ async def compare_ranges(
         "range1": {"start": range1_start, "end": range1_end, "patterns": data1},
         "range2": {"start": range2_start, "end": range2_end, "patterns": data2},
     }
+
+
+@router.get("/trends/{db_id}/client-fingerprints")
+async def get_client_fingerprints(
+    db_id: str,
+    client: str = Query(..., min_length=1),
+    range: str = Query(default="24h", regex="^(24h|7d|30d)$"),
+):
+    """Get the top fingerprints (query patterns) for a specific client IP."""
+    store = _app_state["store"]
+    seconds = _parse_range(range)
+    end_time = time.time()
+    start_time = end_time - seconds
+
+    data = await store.get_client_top_fingerprints(db_id, start_time, end_time, client)
+    return {"db_id": db_id, "client": client, "fingerprints": data}
